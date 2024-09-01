@@ -1,0 +1,207 @@
+---
+title: "High-income Countries Should Pay For Climate Damage"
+author: "Nathan Susser"
+date: "2022-12-05"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+```{r}
+library(tidyverse)
+library(tidyverse)
+library(ggplot2)
+library(gt)
+library(gtExtras)
+library(lubridate)
+library(scales)
+setwd("/Users/nsusser/Dropbox/PSCI1800")
+WBdata <- read_csv("Data/Raw/World Bank FP.csv") #import world bank data
+
+clean_data <- WBdata %>%
+  pivot_longer(c(`2000 [YR2000]`:`2020 [YR2020]`),
+                                 names_to = "year",
+                                 values_to = "values") %>% # pivot the years to their own columns and the values to their own columns as well
+  filter(!(values==".."))%>% # take out non-existent values
+  mutate(series = ifelse(`Series Code` == "EN.ATM.CO2E.KT","CO2", ifelse(`Series Code` == "SP.POP.TOTL","POP","NNI"))) %>% # edit the series to easier to recognize codes
+  mutate(num_values = as.numeric(values)) # change the values from characters to numbers
+  
+  
+for (i in 1:length(clean_data$`Country Name`)) {
+  clean_data$year[i] <- str_sub(clean_data$year[i], 1, 4)
+} # take each year
+
+# create a dataset with just CO2
+CO2_data <- clean_data %>%
+  filter(series == "CO2") %>%
+  select(`Country Name`, `Country Code`, year, num_values) %>%
+  rename(CO2_values = num_values)
+#View(CO2_data)
+
+# create a dataset with just net national income
+NNI_data <- clean_data %>%
+  filter(series == "NNI") %>%
+  select(`Country Name`, `Country Code`, year, num_values) %>%
+  rename(NNI_values = num_values)
+#View(NNI_data)
+
+# create a dataset with population data
+POP_data <- clean_data %>%
+  filter(series == "POP") %>%
+  select(`Country Name`, `Country Code`, year, num_values) %>%
+  rename(POP_values = num_values)
+#View(POP_data)
+
+# join those three datasets so each country and year holds all the values
+combined_data_1 <- inner_join(x = NNI_data, y = POP_data, by = c("Country Name","Country Code", "year"))
+
+combined_data <- inner_join(x = combined_data_1, y = CO2_data, by = c("Country Name","Country Code", "year"))
+
+# find the income per person then average income for each country over the 20 years
+income_per_capita <- combined_data %>%
+  mutate(ipc = NNI_values / POP_values) %>%
+  group_by(`Country Code`) %>%
+  summarise(avg_inc = mean(ipc)) %>%
+  arrange(desc(avg_inc))
+
+# create a dataset with countries with over $30,000 income per person that will be designated as rich countries
+rich_countries <- income_per_capita %>%
+  filter(avg_inc > 30000)
+
+# create a dataset with countries with over $3,112 income and less than $30000 per person that will be designated as rich countries
+mid_countries <- income_per_capita %>%
+  filter(avg_inc > 3112 & avg_inc < 30000)
+
+# 
+wealth_label <- combined_data %>%
+  filter(`Country Code` != "MMR") %>% # filter out Myanmar because data is off
+  mutate(ipc = NNI_values / POP_values) %>% # income per person
+  mutate(cpc = CO2_values / POP_values) %>% # CO2 (kt) per person
+  mutate(rich = ifelse(`Country Code` %in% mid_countries$`Country Code`,"M", ifelse(`Country Code` %in% rich_countries$`Country Code`, "H","P"))) %>%# boolean value for rich and poor countries
+  mutate(co2perdollar = (CO2_values *1000) / NNI_values) %>% #tons of CO2 /dollar 
+  mutate(dollarsperton = NNI_values/(CO2_values *1000)) %>% #dollars per ton
+  mutate(cpc_ipc = (CO2_values *1000) / ipc, 
+         year = as.Date(year, format = "%Y"),
+         year = year(year)) # tons of CO2 
+```
+
+```{r}
+graph_1 <- wealth_label %>%
+  group_by(year, rich) %>%
+  summarise(avg_cpc = 1000*mean(cpc)) %>% # average co2 by rich and poor countries
+  ggplot(aes(y = avg_cpc, x = year, color = as.factor(rich))) +
+  geom_line() +
+  ylab("CO2 (tons) Per Capita") + 
+  xlab("Year") +
+  labs(color = "Net National Income", subtitle = "High-Income Countries Produce More CO2 Per Person") +
+  scale_color_discrete(labels=c('High','Middle','Low')) +
+  ggtitle("CO2 Per Capita Over Time")+ 
+  theme(plot.title = element_text(hjust = 0.5)) + 
+  theme_bw()
+```
+
+```{r}
+graph_2 <- wealth_label %>%
+  filter(year == 2000 | year == 2004 | year == 2008 | year == 2012 | year == 2016 | year == 2019) %>%
+  group_by(year,rich,`Country Name`) %>%
+  summarise(avg_cpc = 1000*mean(cpc, na.rm = T),
+            avg_ipc = mean(ipc, na.rm = T)) %>% # average co2 and income by rich and poor countries
+  ggplot(aes(y = avg_cpc, x = avg_ipc)) +
+  geom_point(aes(color = as.factor(rich))) +
+  #geom_text(aes(label = `Country Name`)) +
+  geom_smooth(method= lm) +
+  facet_wrap(~ year) + 
+  ylab("CO2(tons) per Capita") + 
+  xlab("Net National Income Per Capita") +
+  labs(color = "Net National Income") +
+  scale_color_discrete(labels=c('High', 'Middle','Low')) +
+  ggtitle("Higher Income Produces more CO2")+ 
+  theme(plot.title = element_text(hjust = 0.5)) + 
+  theme_bw()
+```
+
+```{r}
+graph_3 <- wealth_label %>%
+  group_by(rich, year) %>%
+  summarise(cpd = mean(co2perdollar, na.rm = T)) %>%
+  ungroup() %>%
+  ggplot(aes(y = cpd, x = year, fill = as.factor(`rich`))) +
+  geom_col(position = "dodge2") +
+  ylab("CO2(tons) Per Dollar") + 
+  xlab("Year") +
+  labs(fill = "Net National Income") +
+  scale_fill_discrete(labels=c('High','Middle','Low')) +
+  ggtitle("CO2 Per Dollar Over Time")+ 
+  theme(plot.title = element_text(hjust = 0.5)) + 
+  theme_bw()
+```
+
+```{r}
+graph_4 <- wealth_label %>%
+  group_by(rich, year) %>%
+  summarise(dpt = mean(dollarsperton, na.rm = T)) %>%
+  ungroup() %>%
+  ggplot(aes(y = dpt, x = year, fill = as.factor(`rich`))) +
+  geom_col(position = "dodge2") +
+  ylab("Income per Ton of CO2") + 
+  xlab("Year") +
+  labs(fill = "Net National Income", subtitle = "High-Income Countries Generate More Income per Ton of CO2") +
+  scale_fill_discrete(labels=c('High','Middle','Low')) +
+  ggtitle("Income per ton of CO2 Over Time") + 
+  theme(plot.title = element_text(hjust = 0.5)) + 
+  theme_bw()
+```
+
+# High-income Countries Should Pay For Climate Damage
+## By Nathan Susser
+ 
+In November, thousands of scientists, politicians, and climate activists converged on Sharm el Sheik for COP27. The news was abuzz with a new agenda item, the creation of a fund for damage and losses in vulnerable countries caused by climate change. Pakistan, having had much of its country decimated by brutal flooding that uprooted families, took livelihoods, caused famine and drought, and swallowed large swaths of land, had proposed the amendment. As a relatively poor nation, Pakistan did not have a wealth of resources available to rich countries to help those hurt by the disaster. Many other low-income nations quickly signed on. The debate centered around whether wealthy countries were responsible for global warming and the detrimental effects harming all countries around the world and if so, should wealthy countries provide money to pay for damage and loss caused by natural disasters? Data from the World Bank provides an answer to whether higher-income countries have historically produced more CO2.
+
+By comparing net national income to CO2 emissions, we can clearly see that high-income countries have emitted considerably more CO2 over time when adjusted for population. This is clearly demonstrated in the Graph “CO2 per Capita Over Time”, which shows the average amount of CO2 released per person by high-income, middle-income, and low-income countries.
+
+In both graphs, a high-income country is a nation where the average net national income per person over the 19 years between 2000 and 2019 is over \$30,000. The list of the countries includes the United States, Canada, European nations like Great Britain, Germany, France, Netherlands, Austria, Belgium, Ireland, Switzerland, Luxembourg, Norway, Finland, Denmark, Sweden, Middle Eastern Countries specifically Qatar, UAE, and Kuwait, Asian nations such as Singapore and Japan, and lastly Australia. Myanmar notably appeared as a wealthy nation and upon further inspection, the data was highly inaccurate so it was removed from the data set. Middle-Income countries are any countries where the income per person was over \$3112, but less than \$30,000. These were countries such as China, Croatia, Argentina, New Zealand, Oman, Spain, Thailand, Russia, and Saudia Arabia. Poor countries, with less than \$3112 net national income per person, were nations such as India, Pakistan, Bangladesh, Chad, Congo, Vietnam, Yemen, the Philippines, and Indonesia. These guides correspond with World Bank definitions.
+
+
+```{r}
+graph_1
+```
+
+Over the time period from 2000 to 2019, middle-income countries produced an average of 5.56 tons of CO2 per person while high-income countries produced 12.65 tons per person. In contrast, low-income countries produced 1.1 tons of CO2 per person. This makes it very clear that high-income countries are disproportionately responsible for CO2 emissions. The difference between high-income countries drops from over 13 more tons of CO2 released per capita to 9 tons more by 2019.
+
+This diminishing gap is due to a reduction in CO2 emissions by wealthy nations rather than an increase in emissions by poor nations. Low-income nations only increased their CO2 emissions by 0.3 tons per person, whereas high-income nations have decreased emissions by 3.64 tons per person. This by no means lets high-income nations off the hook. They still generate much more CO2 and have done so historically.
+
+The production of goods drives economic growth and increases income. Energy is required in the production of goods, which historically required burning fossil fuels to make energy. The industrial revolution catalyzed rapid growth in production and as such, energy use. Unfortunately, the industrial revolution was limited to a select few countries, all of which are considered wealthy nations today. The industrial revolution took place during colonization when today’s wealthy countries raided the natural resources of the developing world to produce more goods, grow their economies, and create a plush and comfortable world for themselves. In doing so, they changed the earth’s atmosphere. Essentially, in the process of developing their economies, high-income countries emitted millions of tons of CO2. While high-income countries’ developed economies changed their way of life for the better, they inadvertently changed the way of life for the entire world in a damaging and potentially fatal way.
+
+```{r}
+graph_4
+```
+
+One of the reasons that high-income countries have been able to decrease emissions is that they are much more efficient in generating income from the production of CO2. Over the past 20 years, low, middle, and high-income countries have become more efficient, but wealthy nations have almost tripled the amount of income per ton of CO2 emitted. Indeed, the gap between high-income countries is much more prominent than the gap between middle and low-income countries seen in the graph above. The reason for this is that high-income countries have become much wealthier in terms of total dollars than middle and low-income countries. This wealth allows them to invest in more energy-efficient technology and production methods to limit carbon emissions while still producing goods at the same or even faster rate.
+
+From 2000 to 2019, high, middle, and low-income countries have all become wealthier. Low-income countries tripled their earnings from \$627 to \$1,879 and middle-income countries more than doubled the net national income per capita from \$4,639 to \$11,357. While this is impressive growth, it pales in comparison to the total amount of growth by high-income countries. Wealthy countries have had an increase of \$21,162. That astounding increase is more than 10 times the current net national income per person of low-income countries. High-income countries started with an average of \$23,697 per person in 2000 and were earning \$44,859 per capita by 2019.
+
+As shown in the graph, wealthy countries generate more income per ton of CO2 released for a number of economic reasons. Primarily, wealth compounds, and high-income nations started with much more wealth because of the industrial revolution and colonization. Furthermore, this wealth allows them to invest in creating more fuel-efficient technology that pervades all aspects of energy use. They can create more energy from cleaner, more efficient power plants that burn fewer fossil fuels and emit less CO2. They can also afford to develop renewable energy sources such as wind and solar and implement a multitude of other processes, big and small, to stop CO2 from being released into the atmosphere. Low-income countries do not have the same level of technology available to limit their carbon emissions. Additionally, wealthy countries have been able to use technology to save energy or use it more efficiently. There are many examples of this efficiency such as much better heating and cooling systems, electric vehicles,  LED lightbulbs, and kitchen appliances. These technologies are expensive and middle and low-income nations cannot afford these. Lastly, wealthy countries export their emissions by having companies native to their country produce goods in low-income nations to save on labor costs and avoid local environmental standards; they then sell the finished product for a much higher price in the country of origin and other wealthy nations. This way, wealthy countries collect a large percentage of income, while low-income countries are left with the carbon bill. With this carbon emissions efficiency, since 2004, wealthy countries have slowly decreased their emissions, while middle and low-income countries are still relying on increasing emissions to grow their economies.
+
+When comparing the two graphs, for the limited amount of carbon released by poor countries, they receive a lot less income. This is a crucial reason why high-income countries should be much larger contributors to efforts to combat carbon emissions, climate change, and its effects.
+
+In COP 26, the discussion surrounded whether wealthy countries should help middle and low-income countries reduce their carbon footprint. By giving money and technology to poor countries, they can more efficiently reduce world pollution. When they direct the money to reduce pollution, they give poor countries incentives to lower emissions by providing help buying new, more energy-efficient equipment. For example, they can provide money to replace old coal-burning power plants with modern gas or renewable power plants. Furthermore, clean energy production and energy-saving technologies will help those countries' economies grow faster, especially since the poor countries will not have to spend their much more precious dollars on implementing new technology. In fact, this solution would be best directed at middle-income countries which produce about five times more CO2 than low-income countries. Low-income countries' carbon footprint is so low compared to high-income and middle-income countries, these technologies would have a larger impact on those economies.
+
+Indeed, there is a clear correlation between high-income countries and CO2 emissions and this is a cyclical phenomenon. Being able to produce more energy has grown the economies of these wealthy countries, and the growth of the economies has allowed them to more effectively protect  against the damage of CO2. Now, low-income countries are facing the same consequences as rich countries, but are much less equipped to deal with them.
+
+CO2 in the atmosphere traps sunlight by reflecting it back to the earth's surface. As more and more CO2 is released into the air, more sunlight is reflected back and the earth is getting warmer. This changes the environment of the world and has many unintended consequences for all wildlife on earth. Most notably for humans, this has created many more natural disasters: Hurricanes, floods, wildlife, and tornadoes.
+
+When these catastrophic events occur, wealthy countries have the resources to aid the affected populations, but low-income countries cannot. They have a more difficult time saving the lives of their people and an even harder time rebuilding them. As high-income countries have disproportionately benefited from and caused global warming, it seems that they should be disproportionately responsible for helping those affected. This is why they should contribute to the damage and loss fund proposed in COP27.
+
+Over the past 20 years, China and the United States have been by far the most serial polluters. India, Russia, and Japan follow behind them. Indeed, the United States, China, and Japan are also the wealthiest nations in total net national income. In terms of per capita, Qatar leads the gulf states of Kuwait, UAE, and Bahrain producing about 38 tons of CO2 per person. These countries produce oil and natural gas and have very limited economic incentives to conserve it. Kiribati, Sao Tome and Principe, Vanuatu, Tonga, Micronesia, Comoros, Dominica, and Samoa have produced the least amount of CO2 per nation. These all happen to be islands particularly vulnerable to rising oceans. Many countries in Africa emit the least amount of CO2 per capita. Those same African nations are also the poorest nations in terms of income per capita. The distribution of both wealth and CO2 production vary dramatically but the effects of climate change are indiscriminate.
+
+It seems like the wealthy polluters listed above among others in Europe, Canada, and Australia should be responsible for helping low and middle-income nations transition to cleaner energy and more importantly, protecting and repairing the lives of their citizens who are more vulnerable to the disastrous effects of climate change.
+
+  
+
+## Methodology:
+
+The raw data from the World Banks global indicators dataset was very messy. It had a specific column for each year and a specific row for each indicator, CO2, population, and net national income. I first used pivot_longer to make each year its own row before filtering out non-existent values. I then used a for loop to rename each year with just the 4 digits because the formatting from the raw data was awkward. I then created 3 seperated datasets for CO2, population, and net national income in order to merge them back together by year so that I had the corresponding values for all 3 variables by Country and by Year. In cleaning this data, I could then use the mutate function to create a number of new variables and proportions I used in my graphs and regressions such as CO2 per capita.

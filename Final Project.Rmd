@@ -1,0 +1,391 @@
+---
+title: "Final Project"
+author: '41586838'
+date: "2022-11-17"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+List of Things to do:
+1. use strings to rename years done
+2. take 25 richest countries compare to everybody else
+3. create an indicator variable
+    variable called rich country
+    give all rich countries 1 and everyone else a 0
+4. take CO2 emisions/people
+5. plot 2 lines
+6. how does that look over time for rich countries
+
+
+second: take C02 per income
+
+regression table
+regress CO2 value on income per person
+then add fixed effect for year and country
+control for variation across time and country
+detrend a lot of the data
+
+
+
+```{r}
+library(tidyverse)
+library(tidyverse)
+library(ggplot2)
+library(gt)
+library(gtExtras)
+library(lubridate)
+library(scales)
+setwd("/Users/nsusser/Dropbox/PSCI1800")
+WBdata <- read_csv("Data/Raw/World Bank FP.csv") 
+WBdata %>%
+  head(10)
+View(WBdata)
+```
+
+```{r}
+clean_data <- WBdata %>%
+  pivot_longer(c(`2000 [YR2000]`:`2020 [YR2020]`),
+                                 names_to = "year",
+                                 values_to = "values") %>%
+  filter(!(values==".."))%>%
+  mutate(series = ifelse(`Series Code` == "EN.ATM.CO2E.KT","CO2", ifelse(`Series Code` == "SP.POP.TOTL","POP","NNI"))) %>%
+  mutate(num_values = as.numeric(values))
+  
+  
+for (i in 1:length(clean_data$`Country Name`)) {
+  clean_data$year[i] <- str_sub(clean_data$year[i], 1, 4)
+}
+  
+
+View(clean_data)
+
+summary(clean_data$num_values)
+```
+
+```{r}
+CO2_data <- clean_data %>%
+  filter(series == "CO2") %>%
+  select(`Country Name`, `Country Code`, year, num_values) %>%
+  rename(CO2_values = num_values)
+#View(CO2_data)
+
+NNI_data <- clean_data %>%
+  filter(series == "NNI") %>%
+  select(`Country Name`, `Country Code`, year, num_values) %>%
+  rename(NNI_values = num_values)
+#View(NNI_data)
+
+POP_data <- clean_data %>%
+  filter(series == "POP") %>%
+  select(`Country Name`, `Country Code`, year, num_values) %>%
+  rename(POP_values = num_values)
+#View(POP_data)
+
+combined_data_1 <- inner_join(x = NNI_data, y = POP_data, by = c("Country Name","Country Code", "year"))
+
+combined_data <- inner_join(x = combined_data_1, y = CO2_data, by = c("Country Name","Country Code", "year"))
+View(combined_data)
+```
+
+```{r}
+income_per_capita <- combined_data %>%
+  mutate(ipc = NNI_values / POP_values) %>%
+  group_by(`Country Code`) %>%
+  summarise(avg_inc = mean(ipc)) %>%
+  arrange(desc(avg_inc))
+
+rich_countries <- income_per_capita %>%
+  filter(avg_inc > 30000)
+View(rich_countries)
+
+mid_countries <- income_per_capita %>%
+  filter(avg_inc > 3112 & avg_inc < 30000)
+mid_countries
+
+wealth_label <- combined_data %>%
+  filter(`Country Code` != "MMR") %>% # filter out myranmar
+  mutate(ipc = NNI_values / POP_values) %>%
+  mutate(cpc = CO2_values / POP_values) %>% # kt per person
+  mutate(rich = ifelse(`Country Code` %in% mid_countries$`Country Code`,"M", ifelse(`Country Code` %in% rich_countries$`Country Code`, "R","P"))) %>%
+  mutate(co2perdollar = (CO2_values *1000) / NNI_values) %>% #tons of CO2 /dollar
+  mutate(dollarsperton =NNI_values/(CO2_values *1000)) %>% #tons of CO2 /dollar
+  mutate(cpc_ipc = (CO2_values *1000) / ipc, 
+         year = as.Date(year, format = "%Y"),
+         year = year(year)) # tons of CO2 
+View(wealth_label)
+```
+
+```{r}
+
+wealth_label %>%
+  group_by(year, rich) %>%
+  summarise(avg_cpc = 1000*mean(cpc))
+
+
+wealth_label %>%
+  group_by(year, rich) %>%
+  summarise(avg_cpc = 1000*mean(cpc)) %>% # average co2 by rich and poor countries tons
+  ggplot(aes(y = avg_cpc, x = year, color = as.factor(rich))) +
+  geom_point() +
+  ylab("CO2(tons) Per Capita") + 
+  xlab("Year") +
+  labs(color = "Country Wealth") +
+  scale_color_discrete(labels=c('Middle','Poor', 'Rich')) +
+  ggtitle("CO2 Per Capita Over Time")+ 
+  theme(plot.title = element_text(hjust = 0.5)) + 
+  theme_bw()
+
+wealth_label %>%
+  group_by(year, rich) %>%
+  summarise(avg_ipc = mean(ipc))
+
+wealth_label %>%
+  group_by(year, rich) %>%
+  summarise(avg_ipc = mean(ipc)) %>% # average co2 by rich and poor countries tons
+  ggplot(aes(y = avg_ipc, x = year, color = as.factor(rich))) +
+  geom_line() +
+  ylab("Income Per Capita") + 
+  xlab("Year") +
+  labs(color = "Country Wealth") +
+  scale_color_discrete(labels=c('Middle','Poor', 'Rich')) +
+  ggtitle("Income Per Capita Over Time")+ 
+  theme(plot.title = element_text(hjust = 0.5)) + 
+  theme_bw()
+```
+
+```{r}
+tots <- wealth_label %>%
+  group_by(`rich`,`Country Name`) %>%
+  summarise(avg_cpc = 1000*mean(cpc, na.rm = T),
+            avg_ipc = mean(ipc, na.rm = T))
+summary(lm(avg_cpc ~ as.factor(rich), data = tots))
+```
+```{r}
+tots <- wealth_label %>%
+  group_by(`rich`,`Country Name`) %>%
+  summarise(avg_cpc = 1000*mean(cpc, na.rm = T),
+            avg_ipc = mean(ipc, na.rm = T))
+summary(lm(avg_ipc ~ as.factor(rich), data = tots))
+```
+
+```{r}
+w2000 <- wealth_label %>%
+  filter(year == 2000) %>%
+  group_by(year,rich, `Country Name`) %>%
+  summarise(avg_cpc = 1000*mean(cpc, na.rm = T),
+            avg_ipc = mean(ipc, na.rm = T))
+summary(lm(avg_cpc ~ as.factor(rich), data = w2000))
+```
+
+```{r}
+w2019 <- wealth_label %>%
+  filter(year == 2019) %>%
+  group_by(year,rich,`Country Name`) %>%
+  summarise(avg_cpc = 1000*mean(cpc, na.rm = T),
+            avg_ipc = mean(ipc, na.rm = T))
+summary(lm(avg_cpc ~ as.factor(rich), data = w2019))
+```
+
+```{r}
+w2018 <- wealth_label %>%
+  filter(year == 2018) %>%
+  group_by(year,rich,`Country Name`) %>%
+  summarise(avg_cpc = 1000*mean(cpc, na.rm = T),
+            avg_ipc = mean(ipc, na.rm = T))
+summary(lm(avg_cpc ~ as.factor(rich), data = w2018))
+```
+
+
+```{r}
+wealth_label %>%
+  filter(`Country Code` == c("USA", "PAK")) %>%
+  ggplot(aes(y = co2perdollar, x = year, color = `Country Code`)) +
+  geom_point()
+```
+
+```{r}
+wealth_label %>%
+  filter(`Country Code` == c("USA", "PAK")) %>%
+  ggplot(aes(y = co2perdollar, x = year, group = `rich`, color = `rich`)) +
+  geom_point()
+```
+
+
+
+```{r}
+# two different calls 
+  ggplot(data = wealth_label) +
+  geom_point(aes(y = cpc, x = ipc, group = `rich`, color = `rich`)) +
+  geom_smooth(aes(y = cpc, x = ipc), method = lm) +
+  facet_wrap(~ year)
+```
+
+```{r}
+wealth_label %>%
+  ggplot(aes(y = ipc, x = cpc, group = `rich`, color = `rich`)) +
+  geom_point() +
+  facet_wrap(~ year)
+```
+
+```{r}
+wealth_label %>%
+  group_by(rich, year) %>%
+  summarise(cpd = mean(co2perdollar, na.rm = T)) %>%
+  ungroup() %>%
+  ggplot() +
+  geom_col(aes(y = cpd, x = year, fill = as.factor(`rich`)), position = "dodge2")
+```
+
+```{r}
+wealth_label %>%
+  group_by(rich, year) %>%
+  summarise(cpd = mean(cpc_ipc, na.rm = T)) %>%
+  ungroup() %>%
+  ggplot() +
+  geom_col(aes(y = cpd, x = year, fill = as.factor(`rich`)), position = "dodge2")
+```
+
+```{r}
+wealth_label %>%
+  group_by(rich, year) %>%
+  summarise(cpd = mean(cpc_ipc, na.rm = T)) %>%
+  ungroup() %>%
+  ggplot() +
+  geom_line(aes(y = cpd, x = year, color = as.factor(`rich`))) +
+   geom_col(aes(y = cpd, x = year, fill = as.factor(`rich`)), position = "dodge2")
+```
+
+
+
+```{r}
+wealth_label %>%
+  filter(year == 2000 | year == 2004 | year == 2008 | year == 2012 | year == 2016 | year == 2019) %>%
+  group_by(year,rich,`Country Name`) %>%
+  summarise(avg_cpc = 1000*mean(cpc, na.rm = T),
+            avg_ipc = mean(ipc, na.rm = T)) %>% # average co2 and income by rich and poor countries
+  ggplot(aes(y = avg_cpc, x = avg_ipc)) +
+  geom_point(aes(color = as.factor(rich))) +
+  #geom_text(aes(label = `Country Name`)) +
+  geom_smooth(method=lm) +
+  facet_wrap(~ year) + 
+  ylab("CO2(tons) per Capita") + 
+  xlab("Net National Income Per Capita") +
+  labs(color = "Country Wealth") +
+  scale_color_discrete(labels=c('Poor', 'Rich')) +
+  ggtitle("Higher Income Countries Produce More CO2")+ 
+  theme(plot.title = element_text(hjust = 0.5)) + 
+  theme_bw()
+```
+
+```{r}
+w2000 <- wealth_label %>%
+  filter(year == 2000) %>%
+  group_by(year,rich,`Country Name`) %>%
+  summarise(avg_cpc = 1000*mean(cpc, na.rm = T),
+            avg_ipc = mean(ipc, na.rm = T))
+summary(lm(avg_cpc ~ avg_ipc, data = w2000))
+
+```
+
+```{r}
+w2004 <- wealth_label %>%
+  filter(year == 2004) %>%
+  group_by(year,rich,`Country Name`) %>%
+  summarise(avg_cpc = 1000*mean(cpc, na.rm = T),
+            avg_ipc = mean(ipc, na.rm = T))
+summary(lm(avg_cpc ~ avg_ipc, data = w2004))
+```
+
+```{r}
+w2019 <- wealth_label %>%
+  filter(year == 2019) %>%
+  group_by(year,rich,`Country Name`) %>%
+  summarise(avg_cpc = 1000*mean(cpc, na.rm = T),
+            avg_ipc = mean(ipc, na.rm = T))
+summary(lm(avg_cpc ~ avg_ipc, data = w2019))
+```
+
+
+
+```{r}
+wealth_label %>%
+  filter(`Country Name`%in% c("United States", "China", "India", "Pakistan", "United Kingdom", "Saudi Arabia", "Phillipines", "Bangladesh", "Haiti", "Ecuador")) %>%
+  ggplot(aes(y = cpc * 1000, x = year)) +
+  geom_point(aes(color = ipc)) #+
+  #geom_text(aes(label = `Country Code`), position = position_dodge(0.1))
+```
+
+```{r}
+View(wealth_label)
+wealth_label %>%
+  filter(`Country Code` == c("USA", "CHN", "IND")) %>%
+  ggplot(aes(y = cpc * 1000, x = year, group = `Country Code`, color = ipc)) +
+  geom_smooth()
+```
+
+```{r}
+wealth_label %>%
+  filter(`Country Name`%in% c("United States", "China", "India", "Pakistan", "United Kingdom", "Saudi Arabia", "Phillipines", "Bangladesh", "Haiti", "Ecuador")) %>%
+  ggplot(aes(y = cpc * 1000, x = year)) +
+  geom_line(aes(group = `Country Code`, color = ipc)) #+
+  #geom_text(aes(label = `Country Code`), position = position_dodge(0.1))
+```
+
+```{r}
+wealth_label %>%
+  filter(`Country Name`%in% c( "China", "India", "Pakistan", "Phillipines", "Bangladesh", "Haiti", "Ecuador")) %>%
+  ggplot(aes(y = cpc * 1000, x = year)) +
+  geom_line(aes(group = `Country Code`, color = ipc))
+```
+
+```{r}
+wealth_label %>%
+  filter(rich == T) %>%
+  ggplot(aes(y = cpc * 1000, x = year)) +
+  geom_line(aes(group = `Country Code`, color = ipc)) +
+  
+  geom_text(aes(label = `Country Code`), position = position_dodge(0.1))
+```
+
+
+
+```{r}
+wealth_label %>%
+  group_by(year, rich) %>%
+  summarise(avg_cpc = 1000*mean(cpc)) %>% # average co2 by rich and poor countries
+  ggplot(aes(y = avg_cpc, x = year, color = as.factor(rich))) +
+  geom_line() +
+  ylab("CO2(tons) Per Capita") + 
+  xlab("Year") +
+  labs(color = "Country Wealth") +
+  scale_color_discrete(labels=c('Poor', 'Rich')) +
+  ggtitle("CO2 Per Capita Over Time")+ 
+  theme(plot.title = element_text(hjust = 0.5)) + 
+  theme_bw()
+```
+
+```{r}
+wealth_label %>%
+  group_by(`Country Name`) %>%
+  summarise(avg_co2 = 1000*mean(CO2_values)) %>%
+  arrange(avg_co2)
+```
+
+```{r}
+wealth_label %>%
+  group_by(`Country Name`) %>%
+  summarise(avg_inc = mean(NNI_values)) %>%
+  arrange(desc(avg_inc))
+
+```
+
+```{r}
+wealth_label %>%
+  group_by(`Country Name`) %>%
+  summarise(avg_cpc = 1000*mean(cpc)) %>%
+  arrange(desc(avg_cpc))
+```
+
